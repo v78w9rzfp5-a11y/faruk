@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>EUR/USD 1M Signal Bot</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #0b1220;
+  color: white;
+  font-family: Arial, sans-serif;
+}
+
+.container {
+  max-width: 520px;
+  margin: auto;
+  background: #1e293b;
+  padding: 22px;
+  border-radius: 20px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.subtitle {
+  color: #94a3b8;
+  margin-top: 6px;
+}
+
+input,
+button {
+  width: 100%;
+  padding: 14px;
+  margin-top: 12px;
+  border-radius: 12px;
+  font-size: 16px;
+}
+
+input {
+  background: #0f172a;
+  color: white;
+  border: 1px solid #475569;
+}
+
+button {
+  background: #22c55e;
+  color: #052e16;
+  border: none;
+  font-weight: bold;
+}
+
+#signal {
+  text-align: center;
+  font-size: 48px;
+  font-weight: bold;
+  padding: 28px 0;
+}
+
+.wait {
+  color: #facc15;
+}
+
+.up {
+  color: #4ade80;
+}
+
+.down {
+  color: #fb7185;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid #334155;
+}
+
+#status {
+  margin-top: 15px;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 10px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.note {
+  margin-top: 18px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>EUR/USD 1-Minute Signal Bot</h1>
+
+<div class="subtitle">
+Signal only — does NOT place Quotex trades
+</div>
+
+<input
+  id="apiKey"
+  type="password"
+  placeholder="Enter Twelve Data API Key"
+>
+
+<button onclick="startBot()">
+START LIVE SIGNAL
+</button>
+
+<div id="signal" class="wait">
+WAIT
+</div>
+
+<div class="row">
+<span>Price</span>
+<b id="price">—</b>
+</div>
+
+<div class="row">
+<span>EMA 9</span>
+<b id="ema">—</b>
+</div>
+
+<div class="row">
+<span>RSI 14</span>
+<b id="rsi">—</b>
+</div>
+
+<div class="row">
+<span>Updated</span>
+<b id="updated">—</b>
+</div>
+
+<div id="status">
+Status: Ready
+</div>
+
+<div class="note">
+UP signal = price above EMA 9 and RSI above 55.<br>
+DOWN signal = price below EMA 9 and RSI below 45.<br>
+Otherwise the bot shows WAIT.
+<br><br>
+This is an analysis tool only. It does not automatically place trades on Quotex.
+</div>
+
+</div>
+
+<script>
+
+let timer = null;
+
+
+/* EMA */
+
+function calculateEMA(values, period) {
+
+    let multiplier = 2 / (period + 1);
+
+    let ema = values[0];
+
+    for (let i = 1; i < values.length; i++) {
+
+        ema =
+            (values[i] - ema) *
+            multiplier +
+            ema;
+    }
+
+    return ema;
+}
+
+
+/* RSI */
+
+function calculateRSI(values, period) {
+
+    let gains = 0;
+    let losses = 0;
+
+    for (
+        let i = values.length - period;
+        i < values.length;
+        i++
+    ) {
+
+        let change =
+            values[i] -
+            values[i - 1];
+
+        if (change > 0) {
+
+            gains += change;
+
+        } else {
+
+            losses -= change;
+
+        }
+    }
+
+    if (losses === 0) {
+
+        return 100;
+
+    }
+
+    let averageGain =
+        gains / period;
+
+    let averageLoss =
+        losses / period;
+
+    let rs =
+        averageGain /
+        averageLoss;
+
+    return 100 -
+        (100 / (1 + rs));
+}
+
+
+/* Get market data */
+
+async function getMarketData(apiKey) {
+
+    const url =
+        "https://api.twelvedata.com/time_series" +
+        "?symbol=EUR/USD" +
+        "&interval=1min" +
+        "&outputsize=100" +
+        "&apikey=" +
+        encodeURIComponent(apiKey);
+
+    const response =
+        await fetch(url);
+
+    if (!response.ok) {
+
+        throw new Error(
+            "HTTP Error: " +
+            response.status
+        );
+
+    }
+
+    const data =
+        await response.json();
+
+    if (data.status === "error") {
+
+        throw new Error(
+            data.message ||
+            "API Error"
+        );
+
+    }
+
+    if (!data.values) {
+
+        throw new Error(
+            "No market data received"
+        );
+
+    }
+
+    return data.values
+        .reverse()
+        .map(candle =>
+            Number(candle.close)
+        )
+        .filter(Number.isFinite);
+}
+
+
+/* Update signal */
+
+async function updateBot(apiKey) {
+
+    try {
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "Status: Getting live data...";
+
+
+        const prices =
+            await getMarketData(apiKey);
+
+
+        if (prices.length < 20) {
+
+            throw new Error(
+                "Not enough candle data"
+            );
+
+        }
+
+
+        const price =
+            prices[prices.length - 1];
+
+
+        const ema =
+            calculateEMA(
+                prices,
+                9
+            );
+
+
+        const rsi =
+            calculateRSI(
+                prices,
+                14
+            );
+
+
+        let signal =
+            "WAIT";
+
+        let signalClass =
+            "wait";
+
+
+        if (
+            price > ema &&
+            rsi > 55
+        ) {
+
+            signal =
+                "UP";
+
+            signalClass =
+                "up";
+
+        }
+
+        else if (
+            price < ema &&
+            rsi < 45
+        ) {
+
+            signal =
+                "DOWN";
+
+            signalClass =
+                "down";
+
+        }
+
+
+        const signalBox =
+            document.getElementById(
+                "signal"
+            );
+
+
+        signalBox.innerText =
+            signal;
+
+        signalBox.className =
+            signalClass;
+
+
+        document.getElementById(
+            "price"
+        ).innerText =
+            price.toFixed(5);
+
+
+        document.getElementById(
+            "ema"
+        ).innerText =
+            ema.toFixed(5);
+
+
+        document.getElementById(
+            "rsi"
+        ).innerText =
+            rsi.toFixed(1);
+
+
+        document.getElementById(
+            "updated"
+        ).innerText =
+            new Date().toLocaleTimeString();
+
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "Status: Live data received";
+
+
+    }
+
+    catch (error) {
+
+        document.getElementById(
+            "signal"
+        ).innerText =
+            "ERROR";
+
+
+        document.getElementById(
+            "signal"
+        ).className =
+            "down";
+
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "Status: " +
+            error.message;
+
+
+        clearInterval(timer);
+
+    }
+
+}
+
+
+/* Start */
+
+function startBot() {
+
+    const apiKey =
+        document.getElementById(
+            "apiKey"
+        ).value.trim();
+
+
+    if (!apiKey) {
+
+        document.getElementById(
+            "status"
+        ).innerText =
+            "Status: Please enter API key";
+
+        return;
+
+    }
+
+
+    clearInterval(timer);
+
+
+    updateBot(apiKey);
+
+
+    timer =
+        setInterval(
+            function () {
+
+                updateBot(apiKey);
+
+            },
+            60000
+        );
+
+}
+
+</script>
+
+</body>
+</html>
